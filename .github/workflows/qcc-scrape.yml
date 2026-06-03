@@ -1,0 +1,52 @@
+name: 企查查每日新增企业爬取
+
+on:
+  schedule:
+    # 北京时间工作日 9:00 (UTC 1:00)
+    - cron: '0 1 * * 1-5'
+  workflow_dispatch:  # 允许手动触发
+
+permissions:
+  contents: write
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: 安装 Chromium 系统依赖
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            ca-certificates fonts-liberation libasound2 libatk-bridge2.0-0 \
+            libatk1.0-0 libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 \
+            libnspr4 libnss3 libu2f-udev libx11-xcb1 libxcomposite1 \
+            libxdamage1 libxrandr2 xdg-utils
+
+      - name: 安装 Node 依赖
+        run: npm install
+
+      - name: 爬取今日数据
+        env:
+          QCC_COOKIE: ${{ secrets.QCC_COOKIE }}
+        run: node qcc_server.js --output ./data
+
+      - name: 提交数据
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/
+          if git diff --cached --quiet; then
+            echo "无新数据"
+          else
+            git commit -m "data: $(date +%Y-%m-%d) 新增企业数据"
+            git push
+            echo "数据已提交"
+          fi

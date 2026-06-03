@@ -1,0 +1,6 @@
+{
+  "buildCommand": "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true next build",
+  "installCommand": "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true npm install",
+  "outputDirectory": ".next",
+  "framework": "nextjs"
+}

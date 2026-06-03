@@ -1,0 +1,5 @@
+node_modules/
+.next/
+qcc_cookies.json
+*.log
+.DS_Store

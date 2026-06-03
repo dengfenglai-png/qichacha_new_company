@@ -1,0 +1,23 @@
+{
+  "name": "qcc-spider",
+  "version": "1.0.0",
+  "description": "企查查每日新增企业爬虫 + 数据展示",
+  "scripts": {
+    "scrape": "node qcc_server.js",
+    "login": "node qcc_server.js --login",
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "next": "^14.2.0",
+    "react": "^18.3.0",
+    "react-dom": "^18.3.0",
+    "puppeteer": "^24.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/react": "^18.3.0",
+    "typescript": "^5.4.0"
+  }
+}
