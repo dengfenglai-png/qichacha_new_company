@@ -93,8 +93,19 @@ function loadCookies() {
 // ================================================================
 
 async function scrapeAllPages(page, targetDate) {
+  // 等待表格渲染
+  try {
+    await page.waitForSelector('.qccd-table-tbody tr', { timeout: 10000 });
+  } catch {
+    console.log('[提取] 表格未出现，可能无数据');
+    return { allData: [], pageInfo: [] };
+  }
+
   // 单一 evaluate 调用：在浏览器内完成全部翻页+提取
-  const result = await page.evaluate(({ targetDate, maxPages, delay }) => {
+  let result;
+  for (let retry = 0; retry < 3; retry++) {
+    try {
+      result = await page.evaluate(({ targetDate, maxPages, delay }) => {
     const listDiv = document.querySelector('.new-company-list');
     const listVm = listDiv && listDiv.__vue__;
     if (!listVm) return JSON.stringify({ error: '找不到列表 Vue 实例' });
@@ -148,7 +159,17 @@ async function scrapeAllPages(page, targetDate) {
 
       return JSON.stringify({ allData, pageInfo, totalItems });
     })();
-  }, { targetDate, maxPages: CONFIG.maxPages, delay: CONFIG.pageDelay });
+      }, { targetDate, maxPages: CONFIG.maxPages, delay: CONFIG.pageDelay });
+      break;
+    } catch (e) {
+      if (retry < 2) {
+        console.log(`[重试] 翻页 evaluate 失败, 等待后重试 (${retry + 1}/2)...`);
+        await sleep(3000);
+      } else {
+        throw e;
+      }
+    }
+  }
 
   return JSON.parse(result);
 }
@@ -199,18 +220,47 @@ async function scrapeToday(options = {}) {
     const filterStr = JSON.stringify(filterObj);
     const url = `${CONFIG.baseUrl}/web/elib/ncompanylist?filter=${encodeURIComponent(filterStr)}`;
 
-    console.log(`[导航] 列表页...`);
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: CONFIG.timeout });
-    await sleep(3000);
+    console.log(`[导航] 列表页: ${url}`);
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: CONFIG.timeout });
 
-    // 4. 检查登录
-    const loginCheck = await page.evaluate(() => {
-      const rows = document.querySelectorAll('.qccd-table-tbody tr');
-      if (rows.length > 0) return { ok: true, rows: rows.length };
-      const bodyText = document.body?.innerText || '';
-      if (bodyText.includes('登录')) return { ok: false, reason: 'not-logged-in' };
-      return { ok: false, reason: 'no-data' };
-    });
+    // 等待页面稳定（WAF 可能在 networkidle2 后再做一次重定向）
+    await sleep(2000);
+    try {
+      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 });
+      console.log('[导航] 检测到重定向后等待完成');
+    } catch {
+      // 没有重定向就继续
+    }
+
+    // 等待表格或登录框出现
+    try {
+      await page.waitForSelector('.qccd-table-tbody tr, .login-box, .err-page', { timeout: 15000 });
+    } catch {
+      console.log('[导航] 等待超时，当前 URL:', page.url());
+    }
+    await sleep(1000);
+
+    // 4. 检查登录（带重试，防止 evaluate 时页面导航）
+    let loginCheck;
+    for (let retry = 0; retry < 3; retry++) {
+      try {
+        loginCheck = await page.evaluate(() => {
+          const rows = document.querySelectorAll('.qccd-table-tbody tr');
+          if (rows.length > 0) return { ok: true, rows: rows.length };
+          const bodyText = document.body?.innerText || '';
+          if (bodyText.includes('登录')) return { ok: false, reason: 'not-logged-in' };
+          return { ok: false, reason: 'no-data' };
+        });
+        break;
+      } catch (e) {
+        if (retry < 2) {
+          console.log(`[重试] evaluate 失败, 等待后重试 (${retry + 1}/2)...`);
+          await sleep(3000);
+        } else {
+          throw e;
+        }
+      }
+    }
 
     if (!loginCheck.ok) {
       if (loginCheck.reason === 'not-logged-in') {
@@ -226,6 +276,13 @@ async function scrapeToday(options = {}) {
         console.error('[错误] 页面无数据');
         return [];
       }
+    }
+
+    // 检查是否被 WAF 拦截
+    const currentUrl = page.url();
+    if (currentUrl.includes('login') || currentUrl.includes('deny')) {
+      console.error(`[错误] 页面被拦截: ${currentUrl}`);
+      return [];
     }
 
     // 5. 保存 cookie 快照
