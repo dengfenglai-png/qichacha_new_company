@@ -251,8 +251,12 @@ async function scrapeToday(options = {}) {
           const rows = document.querySelectorAll('.qccd-table-tbody tr');
           if (rows.length > 0) return { ok: true, rows: rows.length };
           const bodyText = document.body?.innerText || '';
-          if (bodyText.includes('登录')) return { ok: false, reason: 'not-logged-in' };
-          return { ok: false, reason: 'no-data' };
+          const title = document.title || '';
+          // 截取前 500 字符用于调试
+          const preview = bodyText.slice(0, 500);
+          if (bodyText.includes('登录')) return { ok: false, reason: 'not-logged-in', title, preview };
+          if (bodyText.includes('验证') || bodyText.includes('安全')) return { ok: false, reason: 'challenge', title, preview };
+          return { ok: false, reason: 'no-data', title, preview };
         });
         break;
       } catch (e) {
@@ -267,16 +271,19 @@ async function scrapeToday(options = {}) {
 
     if (!loginCheck.ok) {
       if (loginCheck.reason === 'not-logged-in') {
+        console.error(`[错误] 未登录 | title: ${loginCheck.title}`);
         if (headless !== false) {
-          console.error('[错误] 未登录！请在本地运行: node qcc_server.js --login');
           return [];
         }
         console.log('[登录] 请在浏览器中手动登录，完成后按 Enter...');
         await waitForUserInput();
         await page.goto(url, { waitUntil: 'networkidle2', timeout: CONFIG.timeout });
         await sleep(3000);
+      } else if (loginCheck.reason === 'challenge') {
+        console.error(`[错误] 遇到验证页面 | title: ${loginCheck.title} | body: ${loginCheck.preview?.slice(0, 200)}`);
+        return [];
       } else {
-        console.error('[错误] 页面无数据');
+        console.error(`[错误] 页面无数据 | title: ${loginCheck.title} | body: ${loginCheck.preview?.slice(0, 200)}`);
         return [];
       }
     }
