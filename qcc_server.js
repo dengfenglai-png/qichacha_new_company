@@ -17,7 +17,9 @@
  *   0 9 * * 1-5 cd /opt/qcc-spider && node qcc_server.js >> cron.log 2>&1
  */
 
-const puppeteer = require('puppeteer');
+const puppeteer = require('puppeteer-extra');
+const StealthPlugin = require('puppeteer-extra-plugin-stealth');
+puppeteer.use(StealthPlugin());
 const fs = require('fs');
 const path = require('path');
 
@@ -192,14 +194,24 @@ async function scrapeToday(options = {}) {
       '--no-sandbox',
       '--disable-setuid-sandbox',
       '--disable-blink-features=AutomationControlled',
+      '--disable-features=IsolateOrigins,site-per-process',
+      '--disable-infobars',
+      '--window-size=1280,800',
     ],
   });
 
   const page = await browser.newPage();
   await page.setUserAgent(
-    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
   );
   await page.setViewport({ width: 1280, height: 800 });
+
+  // 隐藏自动化痕迹
+  await page.evaluateOnNewDocument(() => {
+    Object.defineProperty(navigator, 'webdriver', { get: () => false });
+    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+    Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+  });
 
   try {
     // 1. 访问首页获取新鲜 acw_tc
