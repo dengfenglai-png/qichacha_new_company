@@ -233,24 +233,15 @@ async function scrapeToday(options = {}) {
     const url = `${CONFIG.baseUrl}/web/elib/ncompanylist?filter=${encodeURIComponent(filterStr)}`;
 
     console.log(`[导航] 列表页: ${url}`);
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: CONFIG.timeout });
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: CONFIG.timeout });
+    await sleep(3000);
 
-    // 等待页面稳定（WAF 可能在 networkidle2 后再做一次重定向）
-    await sleep(2000);
+    // 等表格出现（WAF 可能在加载后做重定向）
     try {
-      await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 10000 });
-      console.log('[导航] 检测到重定向后等待完成');
+      await page.waitForSelector('.qccd-table-tbody tr, .login-box, .err-page', { timeout: 10000 });
     } catch {
-      // 没有重定向就继续
+      console.log('[导航] 表格未出现，当前 URL:', page.url());
     }
-
-    // 等待表格或登录框出现
-    try {
-      await page.waitForSelector('.qccd-table-tbody tr, .login-box, .err-page', { timeout: 15000 });
-    } catch {
-      console.log('[导航] 等待超时，当前 URL:', page.url());
-    }
-    await sleep(1000);
 
     // 4. 检查登录（带重试，防止 evaluate 时页面导航）
     let loginCheck;
