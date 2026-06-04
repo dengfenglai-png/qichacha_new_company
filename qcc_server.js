@@ -312,26 +312,23 @@ async function scrapeToday(options = {}) {
     const companies = result.allData || [];
     console.log(`[分页] 共 ${result.pageInfo.length} 页, 匹配 ${targetDate}: ${companies.length} 条`);
 
-    // 7. 保存
-    const outputPath = path.join(CONFIG.outputDir, `new_companies_${targetDate}.json`);
-    fs.writeFileSync(outputPath, JSON.stringify(companies, null, 2), 'utf-8');
-
-    // 日期分布
-    const dateDist = {};
-    (result.allData || []).forEach(c => { dateDist[c.date] = (dateDist[c.date] || 0) + 1; });
-    if (Object.keys(dateDist).length > 0) {
-      console.log(`[日期分布] ${JSON.stringify(dateDist)}`);
-    }
-
-    console.log(`[保存] ${outputPath}`);
-
+    // 7. 保存（空数据不写文件，避免无意义的 commit）
     if (companies.length > 0) {
+      const outputPath = path.join(CONFIG.outputDir, `new_companies_${targetDate}.json`);
+      fs.writeFileSync(outputPath, JSON.stringify(companies, null, 2), 'utf-8');
+
+      // 日期分布
+      const dateDist = {};
+      result.allData.forEach(c => { dateDist[c.date] = (dateDist[c.date] || 0) + 1; });
+      console.log(`[日期分布] ${JSON.stringify(dateDist)}`);
+      console.log(`[保存] ${outputPath}`);
+
       console.log(`\n前 5 条:`);
       companies.slice(0, 5).forEach((c, i) => {
         console.log(`  ${i + 1}. ${c.name} | ${c.capital} | ${c.representative}`);
       });
     } else {
-      console.log('[结果] 当日无新增企业（可能是周末或节假日）');
+      console.log('[结果] 当日无新增企业（可能是周末或节假日），跳过保存');
     }
 
     return companies;

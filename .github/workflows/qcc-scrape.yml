@@ -54,6 +54,7 @@ jobs:
             echo "无新数据"
           else
             git commit -m "data: $(date +%Y-%m-%d) 新增企业数据"
+            git pull --rebase origin main
             git push
             echo "数据已提交"
           fi
