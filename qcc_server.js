@@ -23,6 +23,50 @@ puppeteer.use(StealthPlugin());
 const fs = require('fs');
 const path = require('path');
 
+// ================================================================
+// 工具函数
+// ================================================================
+
+/** 生成 [min, max] 范围内的随机整数 */
+function randomBetween(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min;
+}
+
+/** 随机延迟：基准值 ± 浮动比例，最小不低于 minMs */
+function randomDelay(baseMs, variance = 0.4, minMs = 500) {
+  const ms = Math.max(minMs, baseMs + randomBetween(-Math.floor(baseMs * variance), Math.floor(baseMs * variance)));
+  return new Promise(r => setTimeout(r, ms));
+}
+
+/** 模拟人类滚动：随机滚动几次 */
+async function humanScroll(page) {
+  for (let i = 0; i < randomBetween(1, 3); i++) {
+    await page.evaluate((dist) => {
+      window.scrollBy({ top: dist, behavior: 'smooth' });
+    }, randomBetween(100, 500));
+    await randomDelay(400, 0.5, 200);
+  }
+}
+
+/** 模拟鼠标随机移动 */
+async function humanMouseMove(page) {
+  const x = randomBetween(100, 900);
+  const y = randomBetween(100, 600);
+  await page.mouse.move(x, y, { steps: randomBetween(3, 10) });
+}
+
+/** 随机 User-Agent 池 */
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
+];
+
+function randomUA() {
+  return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
+}
+
 const CONFIG = {
   baseUrl: 'https://www.qcc.com',
   cookieFile: path.join(__dirname, 'qcc_cookies.json'),
@@ -32,8 +76,10 @@ const CONFIG = {
   date: null,
   headless: 'new',
   timeout: 30000,
-  maxPages: 60,
-  pageDelay: 1200,
+  maxPages: 30,            // 从 60 降到 30，减少单次爬取量
+  pageDelayMin: 1800,      // 翻页最小延迟（ms）
+  pageDelayMax: 3500,      // 翻页最大延迟（ms）
+  proxy: null,             // 代理地址，如 http://user:pass@ip:port
 };
 
 // ================================================================
@@ -103,11 +149,17 @@ async function scrapeAllPages(page, targetDate) {
     return { allData: [], pageInfo: [] };
   }
 
+  // 先模拟一波人类行为再开始提取
+  await humanScroll(page);
+  await humanMouseMove(page);
+  await randomDelay(800, 0.5, 400);
+
   // 单一 evaluate 调用：在浏览器内完成全部翻页+提取
+  // 每次翻页间使用随机延迟，模拟人类点击翻页的节奏
   let result;
   for (let retry = 0; retry < 3; retry++) {
     try {
-      result = await page.evaluate(({ targetDate, maxPages, delay }) => {
+      result = await page.evaluate(({ targetDate, maxPages, delayMin, delayMax }) => {
     const listDiv = document.querySelector('.new-company-list');
     const listVm = listDiv && listDiv.__vue__;
     if (!listVm) return JSON.stringify({ error: '找不到列表 Vue 实例' });
@@ -120,11 +172,15 @@ async function scrapeAllPages(page, targetDate) {
     const allData = [];
     const pageInfo = [];
 
-    // 使用 async IIFE 包装（evaluate 支持 async）
+    function randomDelayInPage(min, max) {
+      return Math.floor(Math.random() * (max - min + 1)) + min;
+    }
+
     return (async () => {
-      for (let page = 1; page <= totalPages; page++) {
-        // 翻页
-        listVm.pageChange(page);
+      for (let p = 1; p <= totalPages; p++) {
+        // 随机延迟后再翻页（模拟人看一页数据的时间）
+        const delay = randomDelayInPage(delayMin, delayMax);
+        listVm.pageChange(p);
         await new Promise(r => setTimeout(r, delay));
 
         // 提取当前页数据
@@ -153,20 +209,26 @@ async function scrapeAllPages(page, targetDate) {
         const matched = companies.filter(c => c.date === targetDate);
 
         allData.push(...matched);
-        pageInfo.push({ page, rows: companies.length, matched: matched.length, oldest, newest });
+        pageInfo.push({ page: p, rows: companies.length, matched: matched.length, oldest, newest });
 
         // 当前页最晚的日期都早于目标日期 → 后续页更早，停止
         if (newest < targetDate) break;
+
+        // 每隔几页额外休息一次（模拟人中途停顿）
+        if (p % randomDelayInPage(3, 7) === 0) {
+          await new Promise(r => setTimeout(r, randomDelayInPage(2000, 5000)));
+        }
       }
 
       return JSON.stringify({ allData, pageInfo, totalItems });
     })();
-      }, { targetDate, maxPages: CONFIG.maxPages, delay: CONFIG.pageDelay });
+      }, { targetDate, maxPages: CONFIG.maxPages, delayMin: CONFIG.pageDelayMin, delayMax: CONFIG.pageDelayMax });
       break;
     } catch (e) {
       if (retry < 2) {
-        console.log(`[重试] 翻页 evaluate 失败, 等待后重试 (${retry + 1}/2)...`);
-        await sleep(3000);
+        const wait = randomBetween(3000, 6000);
+        console.log(`[重试] 翻页 evaluate 失败, 等待 ${wait}ms 后重试 (${retry + 1}/2)...`);
+        await sleep(wait);
       } else {
         throw e;
       }
@@ -188,35 +250,116 @@ async function scrapeToday(options = {}) {
 
   console.log(`[启动] 目标: ${targetDate} | ${province}/${city} | 无头: ${headless !== false}`);
 
+  // 代理配置：CLI 参数 > 环境变量 QCC_PROXY > CONFIG
+  const proxy = options.proxy || process.env.QCC_PROXY || CONFIG.proxy;
+  if (proxy) {
+    console.log(`[代理] 使用代理: ${proxy.replace(/\/\/.*@/, '//***@')}`);  // 隐藏密码
+  }
+
+  const launchArgs = [
+    '--no-sandbox',
+    '--disable-setuid-sandbox',
+    '--disable-blink-features=AutomationControlled',
+    '--disable-features=IsolateOrigins,site-per-process',
+    '--disable-infobars',
+    `--window-size=${randomBetween(1200, 1400)},${randomBetween(750, 900)}`,
+    '--disable-dev-shm-usage',
+  ];
+
+  if (proxy) {
+    launchArgs.push(`--proxy-server=${proxy}`);
+  }
+
   const browser = await puppeteer.launch({
     headless,
-    args: [
-      '--no-sandbox',
-      '--disable-setuid-sandbox',
-      '--disable-blink-features=AutomationControlled',
-      '--disable-features=IsolateOrigins,site-per-process',
-      '--disable-infobars',
-      '--window-size=1280,800',
-    ],
+    args: launchArgs,
   });
 
   const page = await browser.newPage();
-  await page.setUserAgent(
-    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36'
-  );
-  await page.setViewport({ width: 1280, height: 800 });
 
-  // 隐藏自动化痕迹
+  // 代理认证（如果代理 URL 包含用户名密码）
+  if (proxy) {
+    try {
+      const proxyUrl = new URL(proxy);
+      if (proxyUrl.username && proxyUrl.password) {
+        await page.authenticate({
+          username: decodeURIComponent(proxyUrl.username),
+          password: decodeURIComponent(proxyUrl.password),
+        });
+      }
+    } catch {}
+  }
+
+  // 随机 User-Agent
+  const ua = randomUA();
+  await page.setUserAgent(ua);
+  console.log(`[UA] ${ua.slice(0, 60)}...`);
+
+  // 随机化视口尺寸（模拟真实屏幕差异）
+  const vw = randomBetween(1200, 1400);
+  const vh = randomBetween(750, 900);
+  await page.setViewport({ width: vw, height: vh });
+
+  // 设置语言相关的 HTTP 头
+  await page.setExtraHTTPHeaders({
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+    'Accept-Encoding': 'gzip, deflate, br',
+  });
+
+  // 隐藏自动化痕迹（增强版）
   await page.evaluateOnNewDocument(() => {
+    // 隐藏 webdriver 标记
     Object.defineProperty(navigator, 'webdriver', { get: () => false });
-    Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+
+    // 伪造 plugins
+    Object.defineProperty(navigator, 'plugins', {
+      get: () => {
+        const plugins = [1, 2, 3, 4, 5];
+        plugins.item = () => null;
+        plugins.namedItem = () => null;
+        plugins.refresh = () => {};
+        return plugins;
+      }
+    });
+
+    // 伪造 languages
     Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
+    Object.defineProperty(navigator, 'language', { get: () => 'zh-CN' });
+
+    // 伪造 platform
+    Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+
+    // 伪造 hardwareConcurrency
+    Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 8 });
+
+    // 伪造 deviceMemory
+    Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+    // 伪造 chrome 对象
+    window.chrome = {
+      runtime: {},
+      loadTimes: () => {},
+      csi: () => {},
+      app: {},
+    };
+
+    // 伪造 permissions
+    const originalQuery = window.navigator.permissions.query;
+    window.navigator.permissions.query = (parameters) => (
+      parameters.name === 'notifications' ?
+        Promise.resolve({ state: Notification.permission }) :
+        originalQuery(parameters)
+    );
   });
 
   try {
-    // 1. 访问首页获取新鲜 acw_tc
+    // 1. 访问首页获取新鲜 acw_tc（带随机延迟模拟人类打开浏览器）
+    console.log('[导航] 访问首页...');
     await page.goto(`${CONFIG.baseUrl}/`, { waitUntil: 'networkidle2', timeout: CONFIG.timeout });
-    await sleep(1500);
+    await humanScroll(page);
+    await humanMouseMove(page);
+    await randomDelay(2000, 0.3, 1500);
 
     // 2. 注入登录 cookie（跳过 acw_tc）
     const savedCookies = loadCookies();
@@ -224,7 +367,10 @@ async function scrapeToday(options = {}) {
       const loginCookies = savedCookies.filter(c => c.name !== 'acw_tc');
       if (loginCookies.length > 0) {
         await page.setCookie(...loginCookies);
+        console.log(`[Cookie] 注入 ${loginCookies.length} 个登录 cookie`);
       }
+    } else {
+      console.error('[Cookie] 无可用的登录 cookie，将尝试未登录访问');
     }
 
     // 3. 打开筛选页面
@@ -234,7 +380,10 @@ async function scrapeToday(options = {}) {
 
     console.log(`[导航] 列表页: ${url}`);
     await page.goto(url, { waitUntil: 'networkidle2', timeout: CONFIG.timeout });
-    await sleep(3000);
+    // 页面加载后模拟人类浏览行为
+    await humanScroll(page);
+    await humanMouseMove(page);
+    await randomDelay(3000, 0.35, 2000);
 
     // 等表格出现（WAF 可能在加载后做重定向）
     try {
@@ -261,8 +410,9 @@ async function scrapeToday(options = {}) {
         break;
       } catch (e) {
         if (retry < 2) {
-          console.log(`[重试] evaluate 失败, 等待后重试 (${retry + 1}/2)...`);
-          await sleep(3000);
+          const wait = randomBetween(3000, 6000);
+          console.log(`[重试] evaluate 失败, 等待 ${wait}ms 后重试 (${retry + 1}/2)...`);
+          await sleep(wait);
         } else {
           throw e;
         }
@@ -271,14 +421,14 @@ async function scrapeToday(options = {}) {
 
     if (!loginCheck.ok) {
       if (loginCheck.reason === 'not-logged-in') {
-        console.error(`[错误] 未登录 | title: ${loginCheck.title}`);
+        console.error(`[错误] 未登录 | title: ${loginCheck.title} | 请更新 QCC_COOKIE secret`);
         if (headless !== false) {
           return [];
         }
         console.log('[登录] 请在浏览器中手动登录，完成后按 Enter...');
         await waitForUserInput();
         await page.goto(url, { waitUntil: 'networkidle2', timeout: CONFIG.timeout });
-        await sleep(3000);
+        await randomDelay(3000, 0.3, 2000);
       } else if (loginCheck.reason === 'challenge') {
         console.error(`[错误] 遇到验证页面 | title: ${loginCheck.title} | body: ${loginCheck.preview?.slice(0, 200)}`);
         return [];
@@ -385,6 +535,7 @@ function parseArgs() {
       case '--date':     opts.date = args[++i]; break;
       case '--headless': opts.headless = args[++i] !== 'false'; break;
       case '--output':   CONFIG.outputDir = args[++i]; break;
+      case '--proxy':    opts.proxy = args[++i]; break;
       case '--help':
         console.log(`
 企查查每日新增企业爬虫（服务器版）
@@ -397,10 +548,12 @@ function parseArgs() {
   --city <code>        城市区号 (默认: 110101)
   --date <YYYY-MM-DD>  目标日期 (默认: 今天)
   --output <dir>       输出目录
+  --proxy <url>        代理地址 (如 http://user:pass@ip:port)
   --headless <bool>    无头模式 (默认: true)
 
 首次: node qcc_server.js --login
 日常: node qcc_server.js
+GHA: node qcc_server.js --proxy "$QCC_PROXY"
 `);
         process.exit(0);
     }
@@ -422,6 +575,11 @@ function waitForUserInput() {
   if (opts.login) {
     await loginMode();
   } else {
+    // 启动时随机延迟 0-5 分钟（避免定时任务整点触发，降低被检测风险）
+    const startupJitter = randomBetween(0, 300000);
+    console.log(`[启动] 随机延迟 ${(startupJitter / 1000).toFixed(0)}s 后开始爬取...`);
+    await sleep(startupJitter);
+
     const count = await scrapeToday(opts);
     console.log(`\n[完成] 共 ${count.length} 条`);
   }

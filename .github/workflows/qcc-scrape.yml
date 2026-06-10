@@ -3,16 +3,22 @@ name: 企查查每日新增企业爬取
 on:
   schedule:
     # 北京时间工作日 9:00 (UTC 1:00)
+    # 注意：GitHub Actions 定时触发可能有 15-60 分钟延迟，属正常现象
     - cron: '0 1 * * 1-5'
   workflow_dispatch:  # 允许手动触发
 
 permissions:
   contents: write
 
+# 防止并发执行（多次手动触发或定时+手动同时触发时只保留最新的）
+concurrency:
+  group: qcc-scrape
+  cancel-in-progress: true
+
 jobs:
   scrape:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
@@ -22,6 +28,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
+      - name: 缓存 Node 依赖
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.npm
+            node_modules
+          key: npm-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: npm-${{ runner.os }}-
+
+      - name: 缓存 Chromium
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/puppeteer
+          key: chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: chromium-${{ runner.os }}-
 
       - name: 安装 Chromium 系统依赖
         run: |
@@ -43,6 +65,7 @@ jobs:
       - name: 爬取今日数据
         env:
           QCC_COOKIE: ${{ secrets.QCC_COOKIE }}
+          QCC_PROXY: ${{ secrets.QCC_PROXY }}
         run: node qcc_server.js --output ./data
 
       - name: 提交数据
