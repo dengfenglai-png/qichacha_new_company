@@ -55,11 +55,11 @@ async function humanMouseMove(page) {
   await page.mouse.move(x, y, { steps: randomBetween(3, 10) });
 }
 
-/** 随机 User-Agent 池 */
+/** 随机 User-Agent 池（全部 Windows + Chrome/Edge，UA 与 platform 一致） */
 const USER_AGENTS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.0.0',
 ];
 
@@ -307,27 +307,46 @@ async function scrapeToday(options = {}) {
     'Accept-Encoding': 'gzip, deflate, br',
   });
 
-  // 隐藏自动化痕迹（增强版）
+  // 隐藏自动化痕迹（增强版，同时在 iframe 中生效）
   await page.evaluateOnNewDocument(() => {
     // 隐藏 webdriver 标记
     Object.defineProperty(navigator, 'webdriver', { get: () => false });
 
-    // 伪造 plugins
+    // 伪造 plugins（长度 > 0 表示正常浏览器）
     Object.defineProperty(navigator, 'plugins', {
       get: () => {
-        const plugins = [1, 2, 3, 4, 5];
-        plugins.item = () => null;
-        plugins.namedItem = () => null;
-        plugins.refresh = () => {};
-        return plugins;
-      }
+        const arr = [
+          { name: 'Chrome PDF Plugin', filename: 'internal-pdf-viewer', description: 'Portable Document Format' },
+          { name: 'Chrome PDF Viewer', filename: 'mhjfbmdgcfjbbpaeojofohoefgiehjai', description: '' },
+          { name: 'Native Client', filename: 'internal-nacl-plugin', description: '' },
+        ];
+        arr.item = (i) => arr[i] || null;
+        arr.namedItem = (name) => arr.find(p => p.name === name) || null;
+        arr.refresh = () => {};
+        Object.setPrototypeOf(arr, PluginArray.prototype);
+        return arr;
+      },
+    });
+
+    // 伪造 mimeTypes
+    Object.defineProperty(navigator, 'mimeTypes', {
+      get: () => {
+        const arr = [
+          { type: 'application/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
+          { type: 'text/pdf', suffixes: 'pdf', description: 'Portable Document Format' },
+        ];
+        arr.item = (i) => arr[i] || null;
+        arr.namedItem = (name) => arr.find(m => m.type === name) || null;
+        Object.setPrototypeOf(arr, MimeTypeArray.prototype);
+        return arr;
+      },
     });
 
     // 伪造 languages
     Object.defineProperty(navigator, 'languages', { get: () => ['zh-CN', 'zh', 'en'] });
     Object.defineProperty(navigator, 'language', { get: () => 'zh-CN' });
 
-    // 伪造 platform
+    // 伪造 platform（与 Windows UA 保持一致）
     Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
 
     // 伪造 hardwareConcurrency
@@ -336,12 +355,62 @@ async function scrapeToday(options = {}) {
     // 伪造 deviceMemory
     Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
 
-    // 伪造 chrome 对象
+    // 伪造 connection（避免 undefined 暴露无头浏览器）
+    Object.defineProperty(navigator, 'connection', {
+      get: () => ({
+        effectiveType: '4g',
+        rtt: 50,
+        downlink: 10,
+        saveData: false,
+        type: 'cellular',
+        onchange: null,
+      }),
+    });
+
+    // 伪造 chrome 对象（带真实方法签名）
     window.chrome = {
-      runtime: {},
-      loadTimes: () => {},
-      csi: () => {},
-      app: {},
+      runtime: {
+        connect: () => ({
+          onMessage: { addListener: () => {} },
+          onDisconnect: { addListener: () => {} },
+          postMessage: () => {},
+          disconnect: () => {},
+        }),
+        sendMessage: () => {},
+        onMessage: { addListener: () => {} },
+        onConnect: { addListener: () => {} },
+        getManifest: () => ({}),
+        getURL: (path) => `chrome-extension://fake/${path}`,
+        id: undefined,
+        lastError: undefined,
+        onInstalled: { addListener: () => {} },
+      },
+      loadTimes: () => ({
+        requestTime: Date.now() / 1000,
+        startLoadTime: Date.now() / 1000,
+        commitLoadTime: Date.now() / 1000,
+        finishDocumentLoadTime: Date.now() / 1000,
+        finishLoadTime: Date.now() / 1000,
+        firstPaintTime: Date.now() / 1000,
+        firstPaintAfterLoadTime: 0,
+        navigationType: 'Other',
+        wasFetchedViaSpdy: true,
+        wasNpnNegotiated: true,
+        npnNegotiatedProtocol: 'http/1.1',
+        wasAlternateProtocolAvailable: false,
+        connectionInfo: 'http/1.1',
+      }),
+      csi: () => ({
+        startE: Date.now(),
+        onloadT: Date.now(),
+        pageT: Math.random() * 500 + 100,
+        tran: 15,
+      }),
+      app: {
+        isInstalled: false,
+        InstallState: { DISABLED: 'disabled', INSTALLED: 'installed', NOT_INSTALLED: 'not_installed' },
+        RunningState: { CANNOT_RUN: 'cannot_run', READY_TO_RUN: 'ready_to_run', RUNNING: 'running' },
+      },
     };
 
     // 伪造 permissions
@@ -351,6 +420,18 @@ async function scrapeToday(options = {}) {
         Promise.resolve({ state: Notification.permission }) :
         originalQuery(parameters)
     );
+
+    // iframe 保护：在 iframe 中也注入相同伪装
+    const reinforceIframe = () => {
+      try {
+        if (window.top !== window.self) {
+          Object.defineProperty(navigator, 'webdriver', { get: () => false });
+          window.chrome = window.top.chrome;
+        }
+      } catch(e) {}
+    };
+    reinforceIframe();
+    window.addEventListener('load', reinforceIframe);
   });
 
   try {
